@@ -11,9 +11,10 @@
 для диагностики (путь выводится в отчёте).
 
 Примеры (запуск из корня проверяемого репозитория):
-    python3 /path/to/verify_commit_range/verify_commit_range.py main..HEAD
     python3 /path/to/verify_commit_range/verify_commit_range.py main..HEAD \
-        --preset host_unit_tests --preset firmware_release
+        --preset host_unit_tests
+    python3 /path/to/verify_commit_range/verify_commit_range.py main..HEAD \
+        --preset host_unit_tests --preset firmware_release --with-tests
 """
 
 from __future__ import annotations
@@ -24,13 +25,6 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-
-# Тестовые пресеты: после сборки для них прогоняется ctest.
-TEST_PRESETS = [
-    "pc_unit_tests",
-]
-
-PC_PRESET_PREFIXES = ("pc_", "gui_with_slint")
 
 # Сколько последних строк лога показывать в отчёте об упавшей команде.
 LOG_TAIL_LINES = 15
@@ -54,21 +48,11 @@ def run_logged(cmd: list[str], cwd: Path, log_file: Path) -> None:
         subprocess.run(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT, check=True)
 
 
-def check_prerequisites(presets: list[str]) -> None:
-    """Проверяет наличие обязательных инструментов и готовность окружения."""
+def check_prerequisites() -> None:
+    """Проверяет наличие обязательных инструментов."""
     for tool in ["git", "cmake", "ninja"]:
         if shutil.which(tool) is None:
             raise RuntimeError(f"Не найден обязательный инструмент: {tool}")
-
-    # Ранняя диагностика окружения PC-сборок (как в build.py), чтобы упасть
-    # с понятным сообщением до создания worktree'ев.
-    if any(p.startswith(PC_PRESET_PREFIXES) for p in presets):
-        result = subprocess.run([sys.executable, "tools/setup_env.py", "--check"])
-        if result.returncode != 0:
-            raise RuntimeError(
-                "Окружение для PC-сборок не готово (см. вывод setup_env.py выше). "
-                "Установка недостающего: python3 tools/setup_env.py --install"
-            )
 
 
 def commit_list(git_range: str) -> list[str]:
@@ -151,21 +135,21 @@ def main() -> int:
     parser.add_argument(
         "--preset",
         action="append",
-        help="Собрать указанный пресет (можно указать несколько раз, "
-        "по умолчанию используется встроенный список TEST_PRESETS)",
+        required=True,
+        help="Собрать указанный пресет (обязательный аргумент, "
+        "можно указать несколько раз)",
     )
     parser.add_argument(
         "--with-tests",
         action="store_true",
-        help="Прогонять ctest после сборки всех указанных пресетов "
-        "(по умолчанию ctest прогоняется только для тестовых пресетов)",
+        help="Прогонять ctest после сборки всех указанных пресетов",
     )
     args = parser.parse_args()
 
-    presets = args.preset if args.preset else TEST_PRESETS.copy()
+    presets = args.preset
 
     try:
-        check_prerequisites(presets)
+        check_prerequisites()
         commits = commit_list(args.range)
     except RuntimeError as e:
         print(f"Ошибка: {e}", file=sys.stderr)
@@ -188,7 +172,7 @@ def main() -> int:
                 try:
                     run_logged(["cmake", "--preset", preset], worktree, log_file)
                     run_logged(["cmake", "--build", f"build/{preset}"], worktree, log_file)
-                    if args.with_tests or preset in TEST_PRESETS:
+                    if args.with_tests:
                         run_logged(
                             [
                                 "ctest",
